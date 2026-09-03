@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Optional
 
 from .audio_analysis import AudioFeatures, AudioSection
 from .director import DirectorSettings
-from .lyrics_analysis import LyricsSection, analyze_lyrics, overall_mood, score_mood, split_into_blocks
+from .lyrics_analysis import LyricsSection, analyze_lyrics, detect_figures, overall_mood, score_mood, split_into_blocks
 from .prompt_builder import build_scene_prompt, build_video_motion_prompt
 from .transcription import TranscriptionResult
 
@@ -491,6 +491,40 @@ def _character_fragment(dna: "ProjectDNA", character_ids: list[str]) -> str:
     return ", ".join(descriptions)
 
 
+_ROLE_TO_PRONOUN_TYPE = {"figure_secondaire": "duo", "groupe": "collectif"}
+
+
+def _select_scene_characters(dna: "ProjectDNA", scene_excerpt: str) -> list[str]:
+    """Conservative, story-driven casting for ONE narrative scene.
+
+    The Project DNA's character list is the film's global cast, not a
+    per-scene guarantee: a secondary/group character only appears in a
+    scene when THIS scene's own text gives local evidence for it (the same
+    conservative detect_figures() signal used to build the DNA in the first
+    place, re-applied to just this scene's window). The principal character
+    is always the safe default -- when a scene has no text at all (audio
+    only, or nothing matched this window), or the evidence is ambiguous, we
+    fall back to the principal alone rather than adding anyone.
+    """
+    principal = next((c for c in dna.characters if c.role == "narrateur_principal"), None)
+    selected: list[str] = [principal.id] if principal else []
+
+    if not scene_excerpt:
+        return selected
+
+    local_hints = {hint.pronoun_type: hint for hint in detect_figures([scene_excerpt])}
+
+    for character in dna.characters:
+        pronoun_type = _ROLE_TO_PRONOUN_TYPE.get(character.role)
+        if pronoun_type is None:
+            continue  # not a duo/groupe-style character (e.g. the principal, already included)
+        hint = local_hints.get(pronoun_type)
+        if hint and not hint.likely_abstract:
+            selected.append(character.id)
+
+    return selected
+
+
 def build_storyboard_from_dna(
     dna: "ProjectDNA",
     audio_sections: list[AudioSection],
@@ -518,7 +552,6 @@ def build_storyboard_from_dna(
     is_repeated = _detect_repeated_excerpts(excerpts)
 
     groups = _group_sections_for_dna(audio_sections, moods, is_repeated)
-    all_character_ids = [c.id for c in dna.characters]
 
     scenes: list[NarrativeScene] = []
     prev_energy: Optional[str] = None
@@ -538,9 +571,10 @@ def build_storyboard_from_dna(
         emotion_score = _emotion_score(scene_mood, combined_excerpt)
         narrative_importance = NARRATIVE_IMPORTANCE.get(role, 0.5)
 
-        # V1 simplification (documented, not hidden): every DNA character is
-        # available in every scene. Per-scene character selection is future work.
-        character_ids = list(all_character_ids)
+        # Story-driven, conservative per-scene casting: the DNA's full cast is
+        # the film's global cast, not a guarantee that everyone appears in
+        # every scene (see _select_scene_characters).
+        character_ids = _select_scene_characters(dna, combined_excerpt)
 
         boundary_hints = [audio_sections[i].start for i in indices] + [audio_sections[i].end for i in indices]
         shot_ranges = plan_shots_for_scene(start, end, energy, role, boundary_hints=boundary_hints)
