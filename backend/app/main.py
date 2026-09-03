@@ -24,28 +24,35 @@ from .director import (
 )
 from .generators import GenerationError, get_generator
 from .models import (
+    AnalyzeStartResponse,
+    CharacterProfileOut,
     DirectorSettingsIn,
     GenerateAudioRequest,
     GenerateImageRequest,
     GeneratedAssetOut,
     GenerateVideoFromImageRequest,
+    NarrativeSceneOut,
     OutputPlanOut,
     PipelineStartResponse,
     PipelineStatusResponse,
+    ProjectDNAOut,
+    ProjectStatusResponse,
+    RenderStartResponse,
     SceneOut,
     ShortClipOut,
     StoryboardRequest,
     StoryboardResponse,
     VariantOut,
 )
-from .outputs_planner import OutputPlan, plan_outputs
-from .pipeline import PipelineJob, run_pipeline
+from .outputs_planner import OutputPlan, plan_outputs, plan_preview
+from .pipeline import PipelineJob, RenderProject, build_project, render_shots, run_pipeline
 from .storyboard import Storyboard, build_storyboard
 
 app = FastAPI(title="Music-to-Story Video AI")
 
 _uploads: dict[str, Path] = {}
 _jobs: dict[str, PipelineJob] = {}
+_projects: dict[str, RenderProject] = {}
 _static_dir = Path(__file__).resolve().parent.parent / "static"
 if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
@@ -304,3 +311,167 @@ def get_pipeline_result(job_id: str):
         raise HTTPException(status_code=409, detail=f"Le clip n'est pas encore pret (statut: {job.status}).")
     filename = "clip_demo.mp4" if job.is_demo else "clip.mp4"
     return FileResponse(job.result_path, media_type="video/mp4", filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# Project DNA flow: musique -> comprehension globale -> scenes -> plans.
+#
+# Phase A (/analyze) never calls a Generator method -- it's free to run and
+# inspect. Phase B (/preview, /full) is the only phase that spends credits;
+# /full reuses the exact same project_id/DNA/storyboard/characters and never
+# re-renders a shot already produced by /preview. Everything above this
+# point (/api/pipeline/run and friends) is untouched for backward
+# compatibility.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/pipeline/analyze", response_model=AnalyzeStartResponse)
+def start_analyze(
+    audio: UploadFile = File(...),
+    lyrics: Optional[str] = Form(None),
+    genre: Optional[str] = Form(None),
+    director: str = Form("{}"),
+    character_photo: Optional[UploadFile] = File(None),
+):
+    import json
+
+    _token, audio_path = _save_upload(audio)
+    character_photo_path: Optional[str] = None
+    if character_photo is not None:
+        _ctoken, character_photo_path_obj = _save_upload(character_photo)
+        character_photo_path = str(character_photo_path_obj)
+
+    director_settings = DirectorSettings(
+        **DirectorSettingsIn(**json.loads(director)).model_dump(exclude={"character_reference_media_id"})
+    )
+
+    project = RenderProject(id=uuid.uuid4().hex)
+    _projects[project.id] = project
+
+    thread = threading.Thread(
+        target=build_project,
+        kwargs=dict(
+            project=project,
+            audio_path=str(audio_path),
+            director=director_settings,
+            lyrics_text=lyrics or None,
+            character_photo_path=character_photo_path,
+            genre_override=genre or None,
+        ),
+        daemon=True,
+    )
+    thread.start()
+
+    return AnalyzeStartResponse(project_id=project.id)
+
+
+def _project_status_response(project: RenderProject) -> ProjectStatusResponse:
+    dna_out = None
+    scenes_out = None
+    total_shots = None
+
+    if project.dna is not None:
+        dna_out = ProjectDNAOut(
+            genre=project.dna.genre,
+            duration_seconds=project.dna.duration_seconds,
+            tempo_bpm=project.dna.tempo_bpm,
+            synopsis=project.dna.narrative.synopsis,
+            characters=[
+                CharacterProfileOut(id=c.id, role=c.role, description=c.description, has_photo=bool(c.source_image_path))
+                for c in project.dna.characters
+            ],
+            referenced_presences_count=len(project.dna.referenced_presences),
+        )
+
+    if project.storyboard is not None:
+        scenes_out = [
+            NarrativeSceneOut(
+                index=s.index,
+                role=s.role,
+                start_seconds=s.start_seconds,
+                end_seconds=s.end_seconds,
+                energy=s.energy,
+                mood=s.mood,
+                is_chorus_scene=s.is_chorus_scene,
+                shot_count=len(s.shots),
+            )
+            for s in project.storyboard.scenes
+        ]
+        total_shots = len(project.storyboard.all_shots())
+
+    return ProjectStatusResponse(
+        project_id=project.id,
+        status=project.status,
+        progress=project.progress,
+        error=project.error,
+        genre_detected=project.genre_detected,
+        dna=dna_out,
+        scenes=scenes_out,
+        total_shots=total_shots,
+        outputs_ready=list(project.outputs.keys()),
+    )
+
+
+@app.get("/api/pipeline/project/{project_id}", response_model=ProjectStatusResponse)
+def get_project_status(project_id: str):
+    project = _projects.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Projet introuvable")
+    return _project_status_response(project)
+
+
+@app.post("/api/pipeline/preview/{project_id}", response_model=RenderStartResponse)
+def start_preview(project_id: str):
+    project = _projects.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Projet introuvable")
+    if project.storyboard is None:
+        raise HTTPException(status_code=409, detail=f"Le projet n'est pas encore analyse (statut: {project.status}).")
+
+    preview_plan = plan_preview(project.storyboard)
+    generator = get_generator()
+
+    thread = threading.Thread(
+        target=render_shots,
+        kwargs=dict(project=project, generator=generator, shot_indices=preview_plan.shot_indices, output_name="preview"),
+        daemon=True,
+    )
+    thread.start()
+
+    return RenderStartResponse(project_id=project.id, output_name="preview", is_demo=not generator.is_real, provider=generator.name)
+
+
+@app.post("/api/pipeline/full/{project_id}", response_model=RenderStartResponse)
+def start_full(project_id: str):
+    """Renders every shot of the storyboard against the SAME project_id used
+    for /preview -- shots already rendered there are reused, never re-billed."""
+    project = _projects.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Projet introuvable")
+    if project.storyboard is None:
+        raise HTTPException(status_code=409, detail=f"Le projet n'est pas encore analyse (statut: {project.status}).")
+
+    all_shot_indices = [shot.index for shot in project.storyboard.all_shots()]
+    generator = get_generator()
+
+    thread = threading.Thread(
+        target=render_shots,
+        kwargs=dict(project=project, generator=generator, shot_indices=all_shot_indices, output_name="full"),
+        daemon=True,
+    )
+    thread.start()
+
+    return RenderStartResponse(project_id=project.id, output_name="full", is_demo=not generator.is_real, provider=generator.name)
+
+
+@app.get("/api/pipeline/output/{project_id}/{output_name}")
+def get_project_output(project_id: str, output_name: str):
+    project = _projects.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Projet introuvable")
+    path = project.outputs.get(output_name)
+    if not path:
+        raise HTTPException(status_code=409, detail=f"'{output_name}' n'est pas encore pret (statut: {project.status}).")
+    is_demo = not get_generator().is_real
+    filename = f"{output_name}_demo.mp4" if is_demo else f"{output_name}.mp4"
+    return FileResponse(path, media_type="video/mp4", filename=filename)

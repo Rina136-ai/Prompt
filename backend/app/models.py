@@ -105,3 +105,59 @@ class PipelineStatusResponse(BaseModel):
     genre_detected: Optional[str] = None
     storyboard: Optional[StoryboardResponse] = None
     result_ready: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Project DNA flow (musique -> comprehension globale -> scenes -> plans).
+# Additive: the models above keep serving the existing endpoints unchanged.
+# ---------------------------------------------------------------------------
+
+
+class AnalyzeStartResponse(BaseModel):
+    project_id: str
+
+
+class CharacterProfileOut(BaseModel):
+    id: str
+    role: str
+    description: str
+    has_photo: bool
+
+
+class ProjectDNAOut(BaseModel):
+    genre: str
+    duration_seconds: float
+    tempo_bpm: float
+    synopsis: str
+    characters: list[CharacterProfileOut]
+    referenced_presences_count: int
+
+
+class NarrativeSceneOut(BaseModel):
+    index: int
+    role: str
+    start_seconds: float
+    end_seconds: float
+    energy: str
+    mood: str
+    is_chorus_scene: bool
+    shot_count: int
+
+
+class ProjectStatusResponse(BaseModel):
+    project_id: str
+    status: str
+    progress: str
+    error: Optional[str] = None
+    genre_detected: Optional[str] = None
+    dna: Optional[ProjectDNAOut] = None
+    scenes: Optional[list[NarrativeSceneOut]] = None
+    total_shots: Optional[int] = None
+    outputs_ready: list[str] = []
+
+
+class RenderStartResponse(BaseModel):
+    project_id: str
+    output_name: str
+    is_demo: bool
+    provider: str

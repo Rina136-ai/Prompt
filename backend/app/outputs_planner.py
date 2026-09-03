@@ -6,11 +6,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .storyboard import Scene, Storyboard
+from .storyboard import NarrativeStoryboard, Scene, Storyboard
 
 SHORT_MIN_SECONDS = 15
 SHORT_MAX_SECONDS = 30
 MAX_SHORTS = 3
+
+PREVIEW_MIN_SECONDS = 20.0
+PREVIEW_MAX_SECONDS = 30.0
+PREVIEW_TARGET_SECONDS = 25.0
 
 
 @dataclass
@@ -93,4 +97,73 @@ def plan_outputs(storyboard: Storyboard) -> OutputPlan:
         lyric_video_scene_indices=scene_indices,
         image_scene_indices=scene_indices,
         variants=_plan_variants(storyboard),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Preview selection (Project DNA / NarrativeStoryboard flow).
+#
+# Correction: the representative excerpt is NOT just the highest-energy
+# passage. Each NarrativeScene already carries a `combined_score` (energy +
+# emotion + narrative importance + chorus bonus, see storyboard.py) and this
+# picks the contiguous window of scenes whose combined score is highest
+# while fitting the target duration -- a proper windowed search, not a
+# "expand from the single energy peak" heuristic.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PreviewPlan:
+    shot_indices: list[int]
+    scene_indices: list[int]
+    start_seconds: float
+    end_seconds: float
+    approx_seconds: float
+
+
+def plan_preview(
+    storyboard: NarrativeStoryboard,
+    target_seconds: float = PREVIEW_TARGET_SECONDS,
+    min_seconds: float = PREVIEW_MIN_SECONDS,
+    max_seconds: float = PREVIEW_MAX_SECONDS,
+) -> PreviewPlan:
+    scenes = storyboard.scenes
+    if not scenes:
+        return PreviewPlan(shot_indices=[], scene_indices=[], start_seconds=0.0, end_seconds=0.0, approx_seconds=0.0)
+
+    n = len(scenes)
+    # (in_range, score, distance_to_target, i, j, duration) for every contiguous window
+    candidates: list[tuple[bool, float, float, int, int, float]] = []
+    for i in range(n):
+        duration = 0.0
+        score = 0.0
+        for j in range(i, n):
+            duration += scenes[j].duration
+            score += scenes[j].combined_score
+            if duration > max_seconds * 2:
+                break
+            in_range = min_seconds <= duration <= max_seconds
+            candidates.append((in_range, score, abs(duration - target_seconds), i, j, duration))
+
+    in_range = [c for c in candidates if c[0]]
+    if in_range:
+        # Highest combined score wins; ties broken by closeness to the target duration.
+        best = max(in_range, key=lambda c: (c[1], -c[2]))
+    elif candidates:
+        # No window fits [min,max] (e.g. a very short song) -- take the
+        # closest-to-target duration available rather than failing.
+        best = min(candidates, key=lambda c: c[2])
+    else:
+        best = (False, 0.0, 0.0, 0, n - 1, sum(s.duration for s in scenes))
+
+    _, _, _, i, j, duration = best
+    window = scenes[i : j + 1]
+    shot_indices = [shot.index for scene in window for shot in scene.shots]
+
+    return PreviewPlan(
+        shot_indices=shot_indices,
+        scene_indices=[s.index for s in window],
+        start_seconds=window[0].start_seconds,
+        end_seconds=window[-1].end_seconds,
+        approx_seconds=round(duration, 1),
     )

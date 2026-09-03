@@ -147,6 +147,12 @@ def trim_clip(input_path: str, start_seconds: float, end_seconds: float, output_
     return output_path
 
 
+def extract_audio_segment(audio_path: str, start_seconds: float, end_seconds: float, output_path: str) -> str:
+    """Cuts the portion of the original audio matching a preview's time window."""
+    _run_ffmpeg(["-i", audio_path, "-ss", str(start_seconds), "-to", str(end_seconds), "-c", "copy", output_path])
+    return output_path
+
+
 def _srt_timestamp(seconds: float) -> str:
     ms = int(round(seconds * 1000))
     h, ms = divmod(ms, 3600_000)

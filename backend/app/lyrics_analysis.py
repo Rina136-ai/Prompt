@@ -22,6 +22,78 @@ MOOD_LEXICON: dict[str, list[str]] = {
 
 _DEFAULT_MOOD = "contemplation"
 
+# Weak signal for who/what the lyrics address -- NOT a casting rule by itself.
+# "solo" markers never add a character (the narrator is already represented).
+# See project_dna.py for the conservative promotion logic that decides
+# whether a "duo"/"collectif" hint becomes an actual visible character.
+FIGURE_LEXICON: dict[str, list[str]] = {
+    "solo": ["je", "j'ai", "moi", "me", "m'appelle"],
+    "duo": ["tu", "toi", "t'aime", "ton coeur", "ta main", "mon amour"],
+    "collectif": ["nous", "on danse", "tous", "ensemble", "la foule", "vous"],
+}
+
+# Referents that usually name something abstract, spiritual, or absent rather
+# than a person who should appear on screen. A "duo"/"collectif" hint found
+# alongside these words is flagged likely_abstract=True.
+ABSTRACT_REFERENT_LEXICON = [
+    "dieu", "seigneur", "le ciel", "la vie", "le temps", "mon pays",
+    "la liberte", "l'esprit", "l'ame", "le destin", "la mort",
+]
+
+
+@dataclass
+class FigureHint:
+    pronoun_type: str  # "solo" | "duo" | "collectif"
+    matched_keywords: list[str]
+    occurrences: int  # number of distinct text segments where this type was found (recurrence, not raw word count)
+    likely_abstract: bool
+
+
+def detect_figures(text_segments: list[str]) -> list[FigureHint]:
+    """Scans lyrics/transcription text for who the song addresses.
+
+    This is deliberately weak and conservative: it flags patterns, it does
+    not decide who gets rendered as a character. A "tu" could be a lover, a
+    dead parent, or God -- this function only reports the raw signal
+    (pronoun_type + whether abstract/spiritual words co-occur); the casting
+    decision itself lives in project_dna.py, and defaults to caution.
+    """
+    matching_segment_count: dict[str, int] = {ptype: 0 for ptype in FIGURE_LEXICON}
+    abstract_segment_count: dict[str, int] = {ptype: 0 for ptype in FIGURE_LEXICON}
+    matched_kw: dict[str, set] = {ptype: set() for ptype in FIGURE_LEXICON}
+
+    for segment in text_segments:
+        normalized = _normalize(segment)
+        if not normalized:
+            continue
+        words = set(normalized.split())
+        segment_is_abstract = any(_normalize(ref) in normalized for ref in ABSTRACT_REFERENT_LEXICON)
+
+        for ptype, keywords in FIGURE_LEXICON.items():
+            hits = [kw for kw in keywords if _normalize(kw) in words or _normalize(kw) in normalized]
+            if not hits:
+                continue
+            matching_segment_count[ptype] += 1
+            matched_kw[ptype].update(hits)
+            if segment_is_abstract:
+                abstract_segment_count[ptype] += 1
+
+    hints: list[FigureHint] = []
+    for ptype in FIGURE_LEXICON:
+        count = matching_segment_count[ptype]
+        if count == 0:
+            continue
+        likely_abstract = abstract_segment_count[ptype] >= (count / 2)
+        hints.append(
+            FigureHint(
+                pronoun_type=ptype,
+                matched_keywords=sorted(matched_kw[ptype]),
+                occurrences=count,
+                likely_abstract=likely_abstract,
+            )
+        )
+    return hints
+
 
 def _normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", text.lower()).strip()

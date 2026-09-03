@@ -1,14 +1,19 @@
 """Builds a scene-by-scene storyboard, from lyrics and/or real audio structure."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Optional
+from difflib import SequenceMatcher
+from typing import TYPE_CHECKING, Optional
 
-from .audio_analysis import AudioFeatures
+from .audio_analysis import AudioFeatures, AudioSection
 from .director import DirectorSettings
 from .lyrics_analysis import LyricsSection, analyze_lyrics, overall_mood, score_mood, split_into_blocks
 from .prompt_builder import build_scene_prompt, build_video_motion_prompt
 from .transcription import TranscriptionResult
+
+if TYPE_CHECKING:
+    from .project_dna import ProjectDNA
 
 GENRE_STAGING: dict[str, str] = {
     "afrobeat": "un groupe de danseurs executant une chorégraphie afrobeat synchronisee",
@@ -227,3 +232,369 @@ def build_storyboard_from_audio(
         )
 
     return Storyboard(genre=genre, overall_mood=_dominant([s.mood for s in scenes]), scenes=scenes)
+
+
+# ---------------------------------------------------------------------------
+# Narrative layer (Project DNA-driven): section musicale -> scene narrative -> plans.
+#
+# Everything above this line (Scene, Storyboard, build_storyboard,
+# build_storyboard_from_audio) is untouched and keeps powering the existing
+# lyrics-required advanced mode. This section is purely additive and backs
+# the new Project DNA flow: a NarrativeScene groups 1..N real audio sections
+# by narrative coherence (not a fixed 1-to-1 mapping), and a NarrativeScene
+# decomposes into 1..N Shot -- the actual generation unit -- whose count and
+# duration are decided by editing rhythm (energy + narrative role + scene
+# duration), never by how many audio sections happen to underlie it. Audio
+# section boundaries are only used as an optional hint for where to place a
+# cut when one falls close to an already-planned cut point.
+# ---------------------------------------------------------------------------
+
+_TARGET_SHOT_SECONDS = {"energique": 3.5, "modere": 6.0, "calme": 9.0}
+_ROLE_SHOT_BIAS = {
+    "refrain": 0.7,
+    "montee": 0.85,
+    "introduction": 1.1,
+    "conclusion": 1.1,
+    "pont": 1.2,
+    "couplet": 1.0,
+}
+MIN_SHOT_SECONDS = 2.5
+MAX_SHOT_SECONDS = 12.0
+MAX_NARRATIVE_SCENE_SECONDS = 28.0
+
+NARRATIVE_IMPORTANCE = {
+    "refrain": 1.0,
+    "montee": 0.7,
+    "pont": 0.6,
+    "couplet": 0.5,
+    "introduction": 0.3,
+    "conclusion": 0.3,
+}
+
+_DNA_ENERGY_ACTION = {
+    "energique": "mouvement vif, energie haute, coupes rapides",
+    "modere": "mouvement fluide, energie moderee",
+    "calme": "mouvement lent, ambiance intimiste",
+}
+
+_ENERGY_RANK = {"calme": 0, "modere": 1, "energique": 2}
+
+
+@dataclass
+class Shot:
+    """The actual generation unit: one Shot = one image generation + one
+    image-to-video generation. Several Shot make up one NarrativeScene."""
+
+    index: int
+    start_seconds: float
+    end_seconds: float
+    character_ids: list[str]
+    image_prompt: str
+    video_prompt: str
+
+    @property
+    def duration(self) -> float:
+        return self.end_seconds - self.start_seconds
+
+
+@dataclass
+class NarrativeScene:
+    """A unit of story, not of raw audio: may span several real audio sections."""
+
+    index: int
+    role: str  # introduction | couplet | montee | refrain | pont | conclusion
+    start_seconds: float
+    end_seconds: float
+    energy: str
+    mood: str
+    is_chorus_scene: bool
+    narrative_importance_score: float
+    emotion_score: float
+    character_ids: list[str]
+    shots: list[Shot] = field(default_factory=list)
+
+    @property
+    def duration(self) -> float:
+        return self.end_seconds - self.start_seconds
+
+    @property
+    def combined_score(self) -> float:
+        """Used by outputs_planner.plan_preview() -- energy + emotion + narrative
+        importance + chorus bonus, never energy alone."""
+        energy_score = {"calme": 0.3, "modere": 0.6, "energique": 1.0}.get(self.energy, 0.5)
+        chorus_bonus = 1.0 if self.is_chorus_scene else 0.0
+        return (
+            0.3 * energy_score
+            + 0.25 * self.emotion_score
+            + 0.25 * self.narrative_importance_score
+            + 0.2 * chorus_bonus
+        )
+
+
+@dataclass
+class NarrativeStoryboard:
+    dna_id: str
+    genre: str
+    scenes: list[NarrativeScene] = field(default_factory=list)
+
+    def all_shots(self) -> list[Shot]:
+        return sorted((shot for scene in self.scenes for shot in scene.shots), key=lambda s: s.index)
+
+    def total_duration(self) -> float:
+        shots = self.all_shots()
+        if not shots:
+            return 0.0
+        return shots[-1].end_seconds - shots[0].start_seconds
+
+
+def _text_similarity(a: str, b: str) -> float:
+    normalize = lambda t: re.sub(r"[^a-z0-9 ]", "", t.lower()).strip()  # noqa: E731
+    na, nb = normalize(a), normalize(b)
+    if not na or not nb:
+        return 0.0
+    return SequenceMatcher(None, na, nb).ratio()
+
+
+def _detect_repeated_excerpts(excerpts: list[str], threshold: float = 0.72) -> list[bool]:
+    repeated = [False] * len(excerpts)
+    for i, a in enumerate(excerpts):
+        if not a.strip():
+            continue
+        for j, b in enumerate(excerpts):
+            if i != j and b.strip() and _text_similarity(a, b) >= threshold:
+                repeated[i] = True
+                break
+    return repeated
+
+
+def _excerpt_for_dna_section(
+    section: AudioSection,
+    transcription: Optional[TranscriptionResult],
+    manual_blocks: list[str],
+    index: int,
+    total: int,
+) -> str:
+    if transcription and transcription.lines:
+        lines = [
+            line.text for line in transcription.lines
+            if section.start <= (line.start + line.end) / 2 < section.end
+        ]
+        return " ".join(lines).strip()
+    if manual_blocks:
+        block_index = min(int(index / total * len(manual_blocks)), len(manual_blocks) - 1)
+        return manual_blocks[block_index]
+    return ""
+
+
+def _aggregate_energy(audio_sections: list[AudioSection], indices: list[int]) -> str:
+    energies = [audio_sections[i].energy for i in indices]
+    return max(set(energies), key=energies.count)
+
+
+def _assign_role(group_index: int, total_groups: int, is_chorus_scene: bool, energy_now: str, energy_prev: Optional[str]) -> str:
+    if group_index == 0:
+        return "introduction"
+    if group_index == total_groups - 1:
+        return "conclusion"
+    if is_chorus_scene:
+        return "refrain"
+    if energy_prev is not None and _ENERGY_RANK.get(energy_now, 1) > _ENERGY_RANK.get(energy_prev, 1):
+        return "montee"
+    return "couplet"
+
+
+def _emotion_score(mood: str, excerpt: str) -> float:
+    if excerpt:
+        _, hits = score_mood(excerpt)
+        return min(1.0, len(hits) / 3.0) if hits else 0.15
+    # No text available: a calm audio-only scene can still carry real emotion,
+    # so this is not simply "high energy = high emotion".
+    return 0.4 if mood != _DEFAULT_MOOD else 0.2
+
+
+def _group_sections_for_dna(
+    audio_sections: list[AudioSection],
+    moods: list[str],
+    is_repeated: list[bool],
+) -> list[list[int]]:
+    """Groups adjacent audio sections into narrative scenes.
+
+    Two adjacent sections merge into the same scene only if they share a
+    mood AND agree on being (or not being) a repeated/chorus-like block, and
+    the merged scene doesn't exceed MAX_NARRATIVE_SCENE_SECONDS. This is the
+    mechanism that lets a NarrativeScene span several sections instead of a
+    fixed 1-to-1 mapping.
+    """
+    groups: list[list[int]] = [[0]]
+    for i in range(1, len(audio_sections)):
+        prev_idx = groups[-1][-1]
+        same_mood = moods[i] == moods[prev_idx]
+        same_repetition_state = is_repeated[i] == is_repeated[prev_idx]
+        candidate_duration = audio_sections[i].end - audio_sections[groups[-1][0]].start
+        if same_mood and same_repetition_state and candidate_duration <= MAX_NARRATIVE_SCENE_SECONDS:
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    return groups
+
+
+def plan_shots_for_scene(
+    start_seconds: float,
+    end_seconds: float,
+    energy: str,
+    role: str,
+    boundary_hints: Optional[list[float]] = None,
+) -> list[tuple[float, float]]:
+    """Decides how many shots a narrative scene gets and how long each is.
+
+    Driven by scene duration, energy, and narrative role -- NEVER by how many
+    audio sections underlie the scene. `boundary_hints` (real audio section
+    boundaries within the scene) are used only to nudge a cut to a nearby
+    real musical change point when one exists close enough; they never
+    change how many shots are planned.
+    """
+    duration = end_seconds - start_seconds
+    if duration <= 0:
+        return [(start_seconds, end_seconds)]
+
+    target = _TARGET_SHOT_SECONDS.get(energy, 6.0) * _ROLE_SHOT_BIAS.get(role, 1.0)
+    target = max(MIN_SHOT_SECONDS, min(MAX_SHOT_SECONDS, target))
+    n_shots = max(1, round(duration / target))
+
+    cuts = [start_seconds + duration * i / n_shots for i in range(n_shots + 1)]
+
+    if boundary_hints and n_shots > 1:
+        tolerance = min(3.0, duration / (2 * n_shots))
+        snapped = [cuts[0]]
+        for cut in cuts[1:-1]:
+            nearest = min(boundary_hints, key=lambda b: abs(b - cut))
+            snapped.append(nearest if abs(nearest - cut) <= tolerance else cut)
+        snapped.append(cuts[-1])
+        cuts = sorted(set(round(c, 2) for c in snapped))
+
+    if len(cuts) < 2:
+        cuts = [start_seconds, end_seconds]
+
+    shots = list(zip(cuts, cuts[1:]))
+
+    merged: list[tuple[float, float]] = []
+    for s, e in shots:
+        if merged and (e - merged[-1][0]) < MIN_SHOT_SECONDS:
+            merged[-1] = (merged[-1][0], e)
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def _character_fragment(dna: "ProjectDNA", character_ids: list[str]) -> str:
+    descriptions = [c.description for cid in character_ids if (c := dna.character_by_id(cid))]
+    return ", ".join(descriptions)
+
+
+def build_storyboard_from_dna(
+    dna: "ProjectDNA",
+    audio_sections: list[AudioSection],
+    lyrics_text: Optional[str] = None,
+    transcription: Optional[TranscriptionResult] = None,
+) -> NarrativeStoryboard:
+    """The new chain: real audio sections -> narrative scenes (Project DNA
+    style/cast) -> shots (editing-rhythm driven). Requires a ProjectDNA
+    already built by project_dna.build_project_dna() so casting/style are
+    decided once, globally, before any scene is planned.
+    """
+    if not audio_sections:
+        return NarrativeStoryboard(dna_id=dna.id, genre=dna.genre, scenes=[])
+
+    manual_blocks = split_into_blocks(lyrics_text) if lyrics_text and not transcription else []
+
+    excerpts = [
+        _excerpt_for_dna_section(section, transcription, manual_blocks, i, len(audio_sections))
+        for i, section in enumerate(audio_sections)
+    ]
+    moods = [
+        score_mood(excerpt)[0] if excerpt else _mood_from_energy(audio_sections[i].energy)
+        for i, excerpt in enumerate(excerpts)
+    ]
+    is_repeated = _detect_repeated_excerpts(excerpts)
+
+    groups = _group_sections_for_dna(audio_sections, moods, is_repeated)
+    all_character_ids = [c.id for c in dna.characters]
+
+    scenes: list[NarrativeScene] = []
+    prev_energy: Optional[str] = None
+    shot_counter = 0
+
+    for g_index, indices in enumerate(groups):
+        start = audio_sections[indices[0]].start
+        end = audio_sections[indices[-1]].end
+        energy = _aggregate_energy(audio_sections, indices)
+        is_chorus_scene = any(is_repeated[i] for i in indices)
+        role = _assign_role(g_index, len(groups), is_chorus_scene, energy, prev_energy)
+        prev_energy = energy
+
+        group_moods = [moods[i] for i in indices]
+        scene_mood = max(set(group_moods), key=group_moods.count)
+        combined_excerpt = " ".join(excerpts[i] for i in indices if excerpts[i]).strip()
+        emotion_score = _emotion_score(scene_mood, combined_excerpt)
+        narrative_importance = NARRATIVE_IMPORTANCE.get(role, 0.5)
+
+        # V1 simplification (documented, not hidden): every DNA character is
+        # available in every scene. Per-scene character selection is future work.
+        character_ids = list(all_character_ids)
+
+        boundary_hints = [audio_sections[i].start for i in indices] + [audio_sections[i].end for i in indices]
+        shot_ranges = plan_shots_for_scene(start, end, energy, role, boundary_hints=boundary_hints)
+
+        shots: list[Shot] = []
+        staging = dna.style.genre_staging_base or _DEFAULT_STAGING
+        for shot_start, shot_end in shot_ranges:
+            evocation = combined_excerpt.splitlines()[0][:80] if combined_excerpt else f"{energy}, role {role}"
+            scene_description = f"{staging}, evoquant: \"{evocation}\""
+            image_prompt = ", ".join(
+                part for part in [
+                    scene_description,
+                    f"genre musical: {dna.genre}",
+                    f"ambiance: {scene_mood}",
+                    dna.style.visual_style,
+                    dna.style.era,
+                    dna.style.decor_family,
+                    dna.style.camera_language,
+                    _character_fragment(dna, character_ids),
+                    _DNA_ENERGY_ACTION.get(energy, ""),
+                    "moment fort du refrain, mise en scene la plus spectaculaire" if is_chorus_scene else "",
+                ]
+                if part
+            )
+            video_prompt = (
+                f"{image_prompt}, camera: {dna.style.camera_language}, "
+                "video courte avec mouvement naturel et cadrage stable"
+            )
+            shots.append(
+                Shot(
+                    index=shot_counter,
+                    start_seconds=round(shot_start, 2),
+                    end_seconds=round(shot_end, 2),
+                    character_ids=character_ids,
+                    image_prompt=image_prompt,
+                    video_prompt=video_prompt,
+                )
+            )
+            shot_counter += 1
+
+        scenes.append(
+            NarrativeScene(
+                index=g_index,
+                role=role,
+                start_seconds=round(start, 2),
+                end_seconds=round(end, 2),
+                energy=energy,
+                mood=scene_mood,
+                is_chorus_scene=is_chorus_scene,
+                narrative_importance_score=narrative_importance,
+                emotion_score=emotion_score,
+                character_ids=character_ids,
+                shots=shots,
+            )
+        )
+
+    return NarrativeStoryboard(dna_id=dna.id, genre=dna.genre, scenes=scenes)
