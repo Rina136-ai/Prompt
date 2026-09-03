@@ -1,0 +1,108 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0f1115;
+  --panel: #171a21;
+  --accent: #e8536b;
+  --text: #f0f0f3;
+  --muted: #9aa0ab;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  padding: 1.5rem 2rem;
+  border-bottom: 1px solid #2a2e38;
+}
+
+header h1 { margin: 0 0 0.25rem; }
+#provider-banner { color: var(--muted); margin: 0; font-size: 0.9rem; }
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 2rem 4rem;
+}
+
+section { margin-bottom: 2rem; }
+
+.mode-grid, .director-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.mode-card {
+  background: var(--panel);
+  border: 2px solid transparent;
+  border-radius: 10px;
+  padding: 1rem;
+  cursor: pointer;
+}
+.mode-card.selected { border-color: var(--accent); }
+.mode-card h3 { margin: 0 0 0.25rem; font-size: 1rem; }
+.mode-card p { margin: 0; color: var(--muted); font-size: 0.85rem; }
+
+label {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+textarea, select, input[type="file"] {
+  width: 100%;
+  margin-top: 0.35rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid #2a2e38;
+  border-radius: 6px;
+  padding: 0.5rem;
+  font-family: inherit;
+}
+
+.director-grid label { background: var(--panel); padding: 0.75rem; border-radius: 8px; }
+
+button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  cursor: pointer;
+}
+button:hover { opacity: 0.9; }
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.scene-card {
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+.scene-card h4 { margin: 0 0 0.25rem; }
+.scene-card .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.5rem; }
+.scene-card pre { white-space: pre-wrap; font-size: 0.8rem; color: var(--muted); }
+.scene-card .highlight-badge { color: var(--accent); font-weight: bold; }
+.asset-result { margin-top: 0.5rem; font-size: 0.85rem; }
+
+.plan-block {
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+.plan-block h4 { margin: 0 0 0.5rem; }
