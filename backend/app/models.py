@@ -68,10 +68,20 @@ class StoryboardResponse(BaseModel):
     audio_summary: Optional[dict] = None
 
 
-class GeneratePromptRequest(BaseModel):
+class GenerateImageRequest(BaseModel):
     prompt: str
-    character_reference_url: Optional[str] = None
-    duration_seconds: float = 5.0
+    character_reference_id: Optional[str] = None
+
+
+class GenerateVideoFromImageRequest(BaseModel):
+    image_url: str
+    prompt: str
+    motion_hint: Optional[str] = None
+
+
+class GenerateAudioRequest(BaseModel):
+    prompt: str
+    duration_seconds: float = 30.0
 
 
 class GeneratedAssetOut(BaseModel):
@@ -79,3 +89,19 @@ class GeneratedAssetOut(BaseModel):
     url: str
     provider: str
     job_id: Optional[str] = None
+
+
+class PipelineStartResponse(BaseModel):
+    job_id: str
+
+
+class PipelineStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    progress: str
+    error: Optional[str] = None
+    provider: str
+    is_demo: bool
+    genre_detected: Optional[str] = None
+    storyboard: Optional[StoryboardResponse] = None
+    result_ready: bool = False

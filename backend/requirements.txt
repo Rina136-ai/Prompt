@@ -4,10 +4,34 @@ pydantic>=2.6
 python-multipart>=0.0.9
 requests>=2.31
 
-# Optional: enables real audio tempo/energy analysis in app/audio_analysis.py.
-# The rest of the app works without them (lyrics-only modes, mock generator).
+# Real audio analysis (tempo, energy, structural segmentation) --
+# app/audio_analysis.py. Lyrics-only advanced mode works without these.
 librosa>=0.10
 numpy>=1.26
+soundfile>=0.12
+
+# Real genre classification (app/genre_classifier.py) -- pyAudioAnalysis
+# bundles its own pretrained SVM model, no external download needed.
+pyAudioAnalysis>=0.3.14
+scikit-learn>=1.3
+scipy>=1.11
+imbalanced-learn>=0.12
+plotly>=5.20
+pydub>=0.25
+hmmlearn>=0.3
+matplotlib>=3.8
+tqdm>=4.66
+eyed3>=0.9
+
+# Real automatic transcription (app/transcription.py). Downloads a Whisper
+# checkpoint from Hugging Face on first use (needs network + disk the first
+# time; fully offline afterwards). Requires system ffmpeg too (see below).
+faster-whisper>=1.0
 
 # Dev/test
 pytest>=8.0
+httpx>=0.27
+
+# System dependency (not installable via pip): the `ffmpeg`/`ffprobe`
+# binaries are required by app/video_assembler.py and by pydub/faster-whisper.
+# Debian/Ubuntu: apt-get install ffmpeg

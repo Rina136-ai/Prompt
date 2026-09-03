@@ -12,62 +12,93 @@
   </header>
 
   <main>
-    <section id="mode-select">
-      <h2>1. Mode de création</h2>
-      <div class="mode-grid" id="mode-grid"></div>
-    </section>
+    <section id="simple-flow">
+      <h2>Importer ma musique → Analyser → Générer mon clip → Regarder/Télécharger</h2>
+      <p class="hint">Un MP3 suffit. Les paroles, la photo d'un personnage et le Directeur artistique sont facultatifs.</p>
 
-    <section id="inputs">
-      <h2>2. Contenu source</h2>
-      <label>Paroles
-        <textarea id="lyrics" rows="10" placeholder="Colle les paroles ici (laisse une ligne vide entre chaque couplet/refrain)"></textarea>
+      <label>1. Ma musique (MP3/WAV/MP4)
+        <input type="file" id="audio-file" accept="audio/*,video/*" />
       </label>
-      <label>Genre musical
-        <select id="genre">
-          <option value="afrobeat">Afrobeat</option>
-          <option value="makossa">Makossa</option>
-          <option value="jazz">Jazz</option>
-          <option value="soul">Soul</option>
-          <option value="gospel">Gospel</option>
-          <option value="rnb">R&amp;B</option>
-          <option value="pop" selected>Pop</option>
-          <option value="rock">Rock</option>
-          <option value="zouk">Zouk</option>
-          <option value="reggae">Reggae</option>
-          <option value="salsa">Salsa</option>
-        </select>
-      </label>
-      <div class="upload-row">
-        <label>Audio (MP3/WAV, optionnel)
-          <input type="file" id="audio-file" accept="audio/*" />
-        </label>
-        <span id="audio-status"></span>
-      </div>
-      <div class="upload-row" id="character-row" style="display:none;">
-        <label>Image du personnage principal
-          <input type="file" id="character-file" accept="image/*" />
-        </label>
+
+      <details>
+        <summary>Paroles (facultatif — sinon transcription automatique si possible)</summary>
+        <textarea id="lyrics" rows="6" placeholder="Colle les paroles ici si tu les as (facultatif)"></textarea>
+      </details>
+
+      <details>
+        <summary>Photo d'un personnage principal (facultatif)</summary>
+        <input type="file" id="character-file" accept="image/*" />
         <span id="character-status"></span>
+      </details>
+
+      <details id="director-details">
+        <summary>Directeur artistique (facultatif — des réglages par défaut sont utilisés sinon)</summary>
+        <label>Genre musical
+          <select id="genre">
+            <option value="" selected>Détection automatique</option>
+            <option value="afrobeat">Afrobeat</option>
+            <option value="makossa">Makossa</option>
+            <option value="jazz">Jazz</option>
+            <option value="soul">Soul</option>
+            <option value="gospel">Gospel</option>
+            <option value="rnb">R&amp;B</option>
+            <option value="pop">Pop</option>
+            <option value="rock">Rock</option>
+            <option value="zouk">Zouk</option>
+            <option value="reggae">Reggae</option>
+            <option value="salsa">Salsa</option>
+          </select>
+        </label>
+        <div class="director-grid" id="director-grid"></div>
+      </details>
+
+      <button id="run-pipeline" class="primary-cta">🎬 Générer mon clip</button>
+
+      <div id="pipeline-progress" hidden>
+        <p id="pipeline-status-text"></p>
+        <p id="pipeline-genre-text" class="hint"></p>
+      </div>
+
+      <div id="pipeline-result" hidden>
+        <div id="pipeline-demo-badge" class="demo-badge" hidden>⚠️ MODE DÉMO — ceci est une simulation hors-ligne, pas une génération IA réelle</div>
+        <video id="pipeline-video" controls style="max-width:100%;border-radius:10px;"></video>
+        <div>
+          <a id="pipeline-download" class="button-link" download="clip.mp4">Télécharger le clip</a>
+        </div>
+        <div id="pipeline-storyboard-summary"></div>
       </div>
     </section>
 
-    <section id="director">
-      <h2>3. Directeur artistique</h2>
-      <div class="director-grid" id="director-grid"></div>
-    </section>
+    <details id="advanced-mode">
+      <summary><h2 style="display:inline">Mode avancé (scène par scène)</h2></summary>
 
-    <section id="actions">
-      <button id="build-storyboard">Générer le storyboard</button>
-    </section>
+      <section id="mode-select">
+        <h3>Mode de création</h3>
+        <div class="mode-grid" id="mode-grid"></div>
+      </section>
 
-    <section id="storyboard-output" hidden>
-      <h2>4. Storyboard</h2>
-      <p id="storyboard-summary"></p>
-      <div id="scenes"></div>
+      <section id="inputs">
+        <h3>Contenu source</h3>
+        <div class="upload-row">
+          <span>Utilise le meme fichier audio que ci-dessus, ou choisis-en un autre :</span>
+          <button id="analyze-audio-advanced" class="secondary">Analyser l'audio (BPM / structure)</button>
+          <span id="audio-status"></span>
+        </div>
+      </section>
 
-      <h2>5. Contenus multiples générés à partir de ce titre</h2>
-      <div id="output-plan"></div>
-    </section>
+      <section id="actions">
+        <button id="build-storyboard">Générer le storyboard (paroles requises)</button>
+      </section>
+
+      <section id="storyboard-output" hidden>
+        <h3>Storyboard</h3>
+        <p id="storyboard-summary"></p>
+        <div id="scenes"></div>
+
+        <h3>Contenus multiples générés à partir de ce titre</h3>
+        <div id="output-plan"></div>
+      </section>
+    </details>
   </main>
 
   <script src="/static/app.js"></script>

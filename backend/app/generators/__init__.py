@@ -5,12 +5,24 @@ from .higgsfield import HiggsfieldGenerator
 from .mock import MockGenerator
 
 
+def _read_credentials() -> tuple[str, str] | None:
+    combined = os.environ.get("HIGGSFIELD_CREDENTIALS")
+    if combined and ":" in combined:
+        key_id, key_secret = combined.split(":", 1)
+        return key_id, key_secret
+    key_id = os.environ.get("HIGGSFIELD_KEY_ID")
+    key_secret = os.environ.get("HIGGSFIELD_KEY_SECRET")
+    if key_id and key_secret:
+        return key_id, key_secret
+    return None
+
+
 def get_generator() -> Generator:
-    """Picks the Higgsfield generator when HIGGSFIELD_API_KEY is set, else falls back to the mock."""
-    api_key = os.environ.get("HIGGSFIELD_API_KEY")
-    if api_key:
-        base_url = os.environ.get("HIGGSFIELD_BASE_URL", "https://api.higgsfield.ai")
-        return HiggsfieldGenerator(api_key=api_key, base_url=base_url)
+    """Picks the real Higgsfield generator when credentials are set, else the mock (MODE DEMO)."""
+    credentials = _read_credentials()
+    if credentials:
+        base_url = os.environ.get("HIGGSFIELD_BASE_URL", "https://platform.higgsfield.ai")
+        return HiggsfieldGenerator(key_id=credentials[0], key_secret=credentials[1], base_url=base_url)
     return MockGenerator()
 
 

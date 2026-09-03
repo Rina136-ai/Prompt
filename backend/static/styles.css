@@ -106,3 +106,55 @@ button.secondary {
   margin-bottom: 0.75rem;
 }
 .plan-block h4 { margin: 0 0 0.5rem; }
+
+.hint { color: var(--muted); font-size: 0.85rem; }
+
+details {
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+details summary { cursor: pointer; font-weight: 600; }
+details textarea, details input, details select { margin-top: 0.5rem; }
+
+#simple-flow {
+  background: linear-gradient(180deg, rgba(232,83,107,0.08), transparent);
+  border: 1px solid rgba(232,83,107,0.35);
+  border-radius: 14px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+}
+#simple-flow > label { margin-bottom: 1rem; }
+
+.primary-cta {
+  font-size: 1.15rem;
+  padding: 1rem 2rem;
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.demo-badge {
+  background: #4a3300;
+  color: #ffd479;
+  border: 1px solid #ffd479;
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+
+.button-link {
+  display: inline-block;
+  margin-top: 0.75rem;
+  background: var(--accent);
+  color: white;
+  border-radius: 8px;
+  padding: 0.6rem 1.2rem;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+#pipeline-progress { margin-top: 1rem; }
+#pipeline-result { margin-top: 1rem; }
+#pipeline-result video { width: 100%; background: black; }

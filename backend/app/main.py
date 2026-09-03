@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import shutil
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .audio_analysis import AudioAnalysisUnavailable, analyze_audio_file
+from .character_reference import ensure_character_reference
 from .config import MODES, UPLOAD_DIR
 from .director import (
     CAMERA_OPTIONS,
@@ -22,21 +24,28 @@ from .director import (
 )
 from .generators import GenerationError, get_generator
 from .models import (
+    DirectorSettingsIn,
+    GenerateAudioRequest,
+    GenerateImageRequest,
     GeneratedAssetOut,
-    GeneratePromptRequest,
+    GenerateVideoFromImageRequest,
     OutputPlanOut,
+    PipelineStartResponse,
+    PipelineStatusResponse,
     SceneOut,
     ShortClipOut,
     StoryboardRequest,
     StoryboardResponse,
     VariantOut,
 )
-from .outputs_planner import plan_outputs
-from .storyboard import build_storyboard
+from .outputs_planner import OutputPlan, plan_outputs
+from .pipeline import PipelineJob, run_pipeline
+from .storyboard import Storyboard, build_storyboard
 
 app = FastAPI(title="Music-to-Story Video AI")
 
 _uploads: dict[str, Path] = {}
+_jobs: dict[str, PipelineJob] = {}
 _static_dir = Path(__file__).resolve().parent.parent / "static"
 if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
@@ -55,6 +64,7 @@ def get_config():
     generator = get_generator()
     return {
         "provider": generator.name,
+        "is_demo": not generator.is_real,
         "modes": MODES,
         "director_options": {
             "characters": CHARACTER_OPTIONS,
@@ -87,8 +97,9 @@ def upload_audio(file: UploadFile = File(...)):
             "duration": features.duration,
             "tempo_bpm": features.tempo_bpm,
             "suggested_genre_family": features.suggested_genre_family(),
-            "segments": [
-                {"start": s.start, "end": s.end, "energy": s.energy} for s in features.segments
+            "sections": [
+                {"start": s.start, "end": s.end, "energy": s.energy, "local_tempo_bpm": s.local_tempo_bpm}
+                for s in features.sections
             ],
         }
     except AudioAnalysisUnavailable as exc:
@@ -122,27 +133,7 @@ def _audio_features_from_token(token: Optional[str]):
         return None
 
 
-@app.post("/api/storyboard", response_model=StoryboardResponse)
-def create_storyboard(payload: StoryboardRequest):
-    if payload.mode not in MODES:
-        raise HTTPException(status_code=400, detail=f"Mode inconnu: {payload.mode}")
-    if not payload.lyrics.strip():
-        raise HTTPException(status_code=400, detail="Les paroles sont requises pour construire le storyboard.")
-
-    director = DirectorSettings(**payload.director.model_dump())
-    audio_features = _audio_features_from_token(payload.audio_token)
-
-    storyboard = build_storyboard(payload.lyrics, director, payload.genre, audio=audio_features)
-    output_plan = plan_outputs(storyboard)
-
-    audio_summary = None
-    if audio_features:
-        audio_summary = {
-            "duration": audio_features.duration,
-            "tempo_bpm": audio_features.tempo_bpm,
-            "suggested_genre_family": audio_features.suggested_genre_family(),
-        }
-
+def _storyboard_response(storyboard: Storyboard, output_plan: OutputPlan, audio_summary: Optional[dict]) -> StoryboardResponse:
     return StoryboardResponse(
         genre=storyboard.genre,
         overall_mood=storyboard.overall_mood,
@@ -159,41 +150,157 @@ def create_storyboard(payload: StoryboardRequest):
     )
 
 
-def _resolve_reference_url(request_base: str, token: Optional[str]) -> Optional[str]:
-    if not token:
-        return None
-    return f"{request_base}/media/{token}"
+@app.post("/api/storyboard", response_model=StoryboardResponse)
+def create_storyboard(payload: StoryboardRequest):
+    """Advanced/manual storyboard endpoint (lyrics required). For the simple
+    "MP3 seul" priority flow with no lyrics, use /api/pipeline/run instead."""
+    if payload.mode not in MODES:
+        raise HTTPException(status_code=400, detail=f"Mode inconnu: {payload.mode}")
+    if not payload.lyrics.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Les paroles sont requises pour ce endpoint manuel. Pour generer un clip a partir d'un MP3 seul, utilisez /api/pipeline/run.",
+        )
+
+    director = DirectorSettings(**payload.director.model_dump(exclude={"character_reference_media_id"}))
+    audio_features = _audio_features_from_token(payload.audio_token)
+
+    storyboard = build_storyboard(payload.lyrics, director, payload.genre, audio=audio_features)
+    output_plan = plan_outputs(storyboard)
+
+    audio_summary = None
+    if audio_features:
+        audio_summary = {
+            "duration": audio_features.duration,
+            "tempo_bpm": audio_features.tempo_bpm,
+            "suggested_genre_family": audio_features.suggested_genre_family(),
+        }
+
+    return _storyboard_response(storyboard, output_plan, audio_summary)
+
+
+@app.post("/api/character-reference")
+def create_character_reference_endpoint(photo_token: Optional[str] = Form(None), director: str = Form("{}")):
+    import json
+
+    generator = get_generator()
+    director_settings = DirectorSettings(**DirectorSettingsIn(**json.loads(director)).model_dump(exclude={"character_reference_media_id"}))
+    photo_path = str(_uploads[photo_token]) if photo_token and photo_token in _uploads else None
+    reference_id = ensure_character_reference(generator, director_settings, uploaded_photo_path=photo_path)
+    if reference_id is None:
+        raise HTTPException(status_code=502, detail="Impossible de creer un personnage de reference avec ce fournisseur.")
+    return {"character_reference_id": reference_id, "provider": generator.name, "is_demo": not generator.is_real}
 
 
 @app.post("/api/generate/image", response_model=GeneratedAssetOut)
-def generate_image(payload: GeneratePromptRequest):
+def generate_image(payload: GenerateImageRequest):
     generator = get_generator()
     try:
-        asset = generator.generate_image(payload.prompt, character_reference_url=payload.character_reference_url)
+        asset = generator.generate_image(payload.prompt, character_reference_id=payload.character_reference_id)
     except GenerationError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return GeneratedAssetOut(kind=asset.kind, url=asset.url, provider=asset.provider, job_id=asset.job_id)
 
 
 @app.post("/api/generate/video", response_model=GeneratedAssetOut)
-def generate_video(payload: GeneratePromptRequest):
+def generate_video(payload: GenerateVideoFromImageRequest):
+    """Image-to-video: Higgsfield (like most real providers) animates an
+    existing image rather than generating video from text alone, so a scene
+    image must be generated first via /api/generate/image."""
     generator = get_generator()
     try:
-        asset = generator.generate_video(
-            payload.prompt,
-            duration_seconds=payload.duration_seconds,
-            character_reference_url=payload.character_reference_url,
-        )
+        asset = generator.generate_video_from_image(payload.image_url, payload.prompt, motion_hint=payload.motion_hint)
     except GenerationError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return GeneratedAssetOut(kind=asset.kind, url=asset.url, provider=asset.provider, job_id=asset.job_id)
 
 
 @app.post("/api/generate/audio", response_model=GeneratedAssetOut)
-def generate_audio(payload: GeneratePromptRequest):
+def generate_audio(payload: GenerateAudioRequest):
     generator = get_generator()
     try:
         asset = generator.generate_audio(payload.prompt, duration_seconds=payload.duration_seconds)
     except GenerationError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return GeneratedAssetOut(kind=asset.kind, url=asset.url, provider=asset.provider, job_id=asset.job_id)
+
+
+# ---------------------------------------------------------------------------
+# Priority flow: "Importer ma musique -> Analyser -> Generer mon clip ->
+# Regarder/Telecharger". Lyrics, character photo and director settings are
+# all optional -- an MP3 alone is enough to produce a full clip.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/pipeline/run", response_model=PipelineStartResponse)
+def start_pipeline(
+    audio: UploadFile = File(...),
+    lyrics: Optional[str] = Form(None),
+    genre: Optional[str] = Form(None),
+    director: str = Form("{}"),
+    character_photo: Optional[UploadFile] = File(None),
+):
+    import json
+
+    _token, audio_path = _save_upload(audio)
+    character_photo_path: Optional[str] = None
+    if character_photo is not None:
+        _ctoken, character_photo_path_obj = _save_upload(character_photo)
+        character_photo_path = str(character_photo_path_obj)
+
+    director_settings = DirectorSettings(**DirectorSettingsIn(**json.loads(director)).model_dump(exclude={"character_reference_media_id"}))
+
+    job = PipelineJob(id=uuid.uuid4().hex)
+    _jobs[job.id] = job
+
+    generator = get_generator()
+    thread = threading.Thread(
+        target=run_pipeline,
+        kwargs=dict(
+            job=job,
+            generator=generator,
+            audio_path=str(audio_path),
+            director=director_settings,
+            lyrics_text=lyrics or None,
+            character_photo_path=character_photo_path,
+            genre_override=genre or None,
+        ),
+        daemon=True,
+    )
+    thread.start()
+
+    return PipelineStartResponse(job_id=job.id)
+
+
+@app.get("/api/pipeline/status/{job_id}", response_model=PipelineStatusResponse)
+def get_pipeline_status(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job introuvable")
+
+    storyboard_response = None
+    if job.storyboard is not None and job.output_plan is not None:
+        storyboard_response = _storyboard_response(job.storyboard, job.output_plan, audio_summary=None)
+
+    return PipelineStatusResponse(
+        job_id=job.id,
+        status=job.status,
+        progress=job.progress,
+        error=job.error,
+        provider=job.provider,
+        is_demo=job.is_demo,
+        genre_detected=job.genre_detected,
+        storyboard=storyboard_response,
+        result_ready=job.status == "done" and bool(job.result_path),
+    )
+
+
+@app.get("/api/pipeline/result/{job_id}")
+def get_pipeline_result(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job introuvable")
+    if job.status != "done" or not job.result_path:
+        raise HTTPException(status_code=409, detail=f"Le clip n'est pas encore pret (statut: {job.status}).")
+    filename = "clip_demo.mp4" if job.is_demo else "clip.mp4"
+    return FileResponse(job.result_path, media_type="video/mp4", filename=filename)
