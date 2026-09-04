@@ -456,24 +456,35 @@ def _emotion_score(mood: str, excerpt: str) -> float:
 
 def _group_sections_for_dna(
     audio_sections: list[AudioSection],
-    moods: list[str],
     is_repeated: list[bool],
 ) -> list[list[int]]:
     """Groups adjacent audio sections into narrative scenes.
 
-    Two adjacent sections merge into the same scene only if they share a
-    mood AND agree on being (or not being) a repeated/chorus-like block, and
-    the merged scene doesn't exceed MAX_NARRATIVE_SCENE_SECONDS. This is the
-    mechanism that lets a NarrativeScene span several sections instead of a
-    fixed 1-to-1 mapping.
+    Two adjacent sections merge into the same scene only if they share the
+    same audio energy level AND agree on being (or not being) a repeated/
+    chorus-like block, and the merged scene doesn't exceed
+    MAX_NARRATIVE_SCENE_SECONDS. This is the mechanism that lets a
+    NarrativeScene span several sections instead of a fixed 1-to-1 mapping.
+
+    Deliberately keyed on audio energy (musical structure), NOT on the
+    per-section textual mood: the mood label is computed from whatever
+    lyric excerpt happens to land on a section, and lyric-sheet formatting
+    (a blank line between two verses) has no reason to line up with an
+    actual scene break. Keying grouping on that fine-grained, often-noisy
+    label reintroduces a mechanical "one lyric block = one scene" coupling
+    (the same family of bug as "one audio section = one scene", just moved
+    one level up) -- a scene's mood/emotion/casting are still fully lyrics-
+    driven (see build_storyboard_from_dna), only where a scene BREAKS is
+    not. This also makes scene boundaries identical whether or not lyrics
+    are supplied for a given audio file, by construction.
     """
     groups: list[list[int]] = [[0]]
     for i in range(1, len(audio_sections)):
         prev_idx = groups[-1][-1]
-        same_mood = moods[i] == moods[prev_idx]
+        same_energy = audio_sections[i].energy == audio_sections[prev_idx].energy
         same_repetition_state = is_repeated[i] == is_repeated[prev_idx]
         candidate_duration = audio_sections[i].end - audio_sections[groups[-1][0]].start
-        if same_mood and same_repetition_state and candidate_duration <= MAX_NARRATIVE_SCENE_SECONDS:
+        if same_energy and same_repetition_state and candidate_duration <= MAX_NARRATIVE_SCENE_SECONDS:
             groups[-1].append(i)
         else:
             groups.append([i])
@@ -561,7 +572,7 @@ def _select_scene_characters(dna: "ProjectDNA", scene_excerpt: str) -> list[str]
         if pronoun_type is None:
             continue  # not a duo/groupe-style character (e.g. the principal, already included)
         hint = local_hints.get(pronoun_type)
-        if hint and not hint.likely_abstract:
+        if hint and not hint.likely_abstract and hint.has_strong_evidence:
             selected.append(character.id)
 
     return selected
@@ -593,7 +604,7 @@ def build_storyboard_from_dna(
     ]
     is_repeated = _detect_repeated_excerpts(excerpts)
 
-    groups = _group_sections_for_dna(audio_sections, moods, is_repeated)
+    groups = _group_sections_for_dna(audio_sections, is_repeated)
 
     scenes: list[NarrativeScene] = []
     prev_energy: Optional[str] = None

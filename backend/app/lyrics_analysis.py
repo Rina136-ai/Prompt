@@ -32,6 +32,16 @@ FIGURE_LEXICON: dict[str, list[str]] = {
     "collectif": ["nous", "on danse", "tous", "ensemble", "la foule", "vous"],
 }
 
+# Within "collectif", "nous"/"tous"/"vous" are common function words used in
+# countless non-referential turns of phrase ("on nous dit que...", "pour
+# tous les...") and must never justify a visible group by themselves, no
+# matter how often they recur. Only these keywords unambiguously describe an
+# actual group presence/action; a group character requires at least one of
+# them (see FigureHint.has_strong_evidence / project_dna._build_cast).
+_STRONG_FIGURE_KEYWORDS: dict[str, set[str]] = {
+    "collectif": {"on danse", "la foule", "ensemble"},
+}
+
 # Referents that usually name something abstract, spiritual, or absent rather
 # than a person who should appear on screen. A "duo"/"collectif" hint found
 # alongside these words is flagged likely_abstract=True.
@@ -47,6 +57,7 @@ class FigureHint:
     matched_keywords: list[str]
     occurrences: int  # number of distinct text segments where this type was found (recurrence, not raw word count)
     likely_abstract: bool
+    has_strong_evidence: bool = True  # False only when a type with weak/strong keywords (see _STRONG_FIGURE_KEYWORDS) matched exclusively on weak ones
 
 
 def detect_figures(text_segments: list[str]) -> list[FigureHint]:
@@ -60,6 +71,7 @@ def detect_figures(text_segments: list[str]) -> list[FigureHint]:
     """
     matching_segment_count: dict[str, int] = {ptype: 0 for ptype in FIGURE_LEXICON}
     abstract_segment_count: dict[str, int] = {ptype: 0 for ptype in FIGURE_LEXICON}
+    strong_segment_count: dict[str, int] = {ptype: 0 for ptype in FIGURE_LEXICON}
     matched_kw: dict[str, set] = {ptype: set() for ptype in FIGURE_LEXICON}
 
     for segment in text_segments:
@@ -77,6 +89,9 @@ def detect_figures(text_segments: list[str]) -> list[FigureHint]:
             matched_kw[ptype].update(hits)
             if segment_is_abstract:
                 abstract_segment_count[ptype] += 1
+            strong_keywords = _STRONG_FIGURE_KEYWORDS.get(ptype)
+            if strong_keywords and any(_normalize(kw) in normalized for kw in strong_keywords):
+                strong_segment_count[ptype] += 1
 
     hints: list[FigureHint] = []
     for ptype in FIGURE_LEXICON:
@@ -84,12 +99,16 @@ def detect_figures(text_segments: list[str]) -> list[FigureHint]:
         if count == 0:
             continue
         likely_abstract = abstract_segment_count[ptype] >= (count / 2)
+        # Types without a strong/weak split (solo, duo) are unaffected: only
+        # a type listed in _STRONG_FIGURE_KEYWORDS can end up "not strong".
+        has_strong_evidence = ptype not in _STRONG_FIGURE_KEYWORDS or strong_segment_count[ptype] > 0
         hints.append(
             FigureHint(
                 pronoun_type=ptype,
                 matched_keywords=sorted(matched_kw[ptype]),
                 occurrences=count,
                 likely_abstract=likely_abstract,
+                has_strong_evidence=has_strong_evidence,
             )
         )
     return hints

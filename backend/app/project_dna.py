@@ -107,11 +107,33 @@ def _build_narrative_arc(text_segments: list[str]) -> NarrativeArc:
         mood, hits = score_mood(segment)
         moods.append(mood)
         keywords.update(hits)
-    dominant = max(set(moods), key=moods.count)
-    synopsis = (
-        f"Une chanson dont l'humeur dominante est '{dominant}', "
-        f"traversant {len(moods)} moments distincts."
+
+    mood_counts: dict[str, int] = {}
+    for mood in moods:
+        mood_counts[mood] = mood_counts.get(mood, 0) + 1
+    ranked_moods = sorted(mood_counts.items(), key=lambda kv: -kv[1])
+    dominant = ranked_moods[0][0]
+    opening, closing = moods[0], moods[-1]
+
+    # A real arc, not just a mode: where the text starts vs. where it ends,
+    # generic for any set of mood labels -- never a hardcoded story beat.
+    if opening != closing:
+        arc_phrase = f"une trajectoire emotionnelle allant de '{opening}' a '{closing}'"
+    else:
+        arc_phrase = f"une trajectoire emotionnelle ancree dans '{dominant}'"
+
+    # A tension: the second most present distinct mood, when there is one --
+    # surfaces contrast/conflict in the text instead of flattening it away.
+    secondary = next((mood for mood, _ in ranked_moods if mood != dominant), None)
+    tension_phrase = (
+        f", avec une tension recurrente entre '{dominant}' et '{secondary}'" if secondary else ""
     )
+
+    theme_phrase = (
+        f", portee par des motifs tels que {', '.join(sorted(keywords)[:5])}" if keywords else ""
+    )
+
+    synopsis = f"Le texte dessine {arc_phrase}{tension_phrase} sur {len(moods)} moments{theme_phrase}."
     return NarrativeArc(synopsis=synopsis, mood_progression=moods, thematic_keywords=sorted(keywords))
 
 
@@ -150,6 +172,19 @@ def _build_cast(
                 ReferencedPresence(
                     pronoun_type=hint.pronoun_type,
                     reason=f"mention trop isolee ({hint.occurrences} occurrence(s)) pour justifier un personnage",
+                )
+            )
+            continue
+
+        if hint.pronoun_type == "collectif" and not hint.has_strong_evidence:
+            # "nous"/"tous"/"vous" recurring alone is not enough: these are
+            # common function words used in plenty of non-referential turns
+            # of phrase. A visible group needs at least one unambiguous cue
+            # (a shared action/gathering), not just a repeated weak pronoun.
+            referenced.append(
+                ReferencedPresence(
+                    pronoun_type=hint.pronoun_type,
+                    reason="mentions collectives recurrentes mais trop generiques (nous/tous/vous) sans indice narratif fort d'un groupe visible",
                 )
             )
             continue
