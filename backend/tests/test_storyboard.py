@@ -44,6 +44,11 @@ def test_video_prompt_references_camera_choice():
     assert "drone" in storyboard.scenes[0].video_prompt.lower() or "aerienne" in storyboard.scenes[0].video_prompt.lower()
 
 
-def test_unknown_genre_falls_back_to_default_staging():
+def test_unknown_genre_falls_back_to_a_valid_staging_not_an_empty_one():
+    # Regression: an unrecognized genre string must still resolve to a real,
+    # non-empty GENRE_STAGING entry (normalize_genre_key -> DEFAULT_GENRE_KEY),
+    # not the fully generic prose fallback.
     storyboard = build_storyboard(LYRICS, DirectorSettings(), genre="chill-lofi")
-    assert "actions et emotions" in storyboard.scenes[0].image_prompt
+    from app.storyboard import DEFAULT_GENRE_KEY, GENRE_STAGING
+
+    assert GENRE_STAGING[DEFAULT_GENRE_KEY] in storyboard.scenes[0].image_prompt

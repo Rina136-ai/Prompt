@@ -15,6 +15,12 @@ MAX_SHORTS = 3
 PREVIEW_MIN_SECONDS = 20.0
 PREVIEW_MAX_SECONDS = 30.0
 PREVIEW_TARGET_SECONDS = 25.0
+# A window scoring best overall can land slightly over PREVIEW_MAX_SECONDS
+# (e.g. 30.05s) -- rejecting it outright over a fraction of a second would
+# throw away the best answer for an arbitrary rounding reason. Candidates up
+# to this much over the cap are still considered, then trimmed precisely
+# (see plan_preview) so the final preview never exceeds PREVIEW_MAX_SECONDS.
+PREVIEW_TOLERANCE_SECONDS = 5.0
 
 
 @dataclass
@@ -119,6 +125,34 @@ class PreviewPlan:
     start_seconds: float
     end_seconds: float
     approx_seconds: float
+    # Maps shot.index -> a duration shorter than that shot's natural
+    # (end_seconds - start_seconds) span, for the one trailing shot (if any)
+    # that had to be cut short to bring an over-length window down to
+    # exactly max_seconds. Absent entries mean "use the shot's own duration".
+    shot_duration_overrides: dict[int, float] = field(default_factory=dict)
+
+
+def _trim_shots_to_max_duration(shots: list, max_seconds: float) -> tuple[list, dict[int, float], float]:
+    """Keeps shots from the start of the window, precisely shortening (never
+    dropping outright unless already at 0) the shot that would cross
+    max_seconds -- trims the end of the window, not the beginning, so the
+    strongest lead-in of the selected moment is preserved."""
+    kept = []
+    overrides: dict[int, float] = {}
+    cumulative = 0.0
+    for shot in shots:
+        if cumulative >= max_seconds:
+            break
+        shot_duration = shot.end_seconds - shot.start_seconds
+        remaining = max_seconds - cumulative
+        if shot_duration > remaining:
+            overrides[shot.index] = round(remaining, 2)
+            cumulative += remaining
+            kept.append(shot)
+            break
+        cumulative += shot_duration
+        kept.append(shot)
+    return kept, overrides, cumulative
 
 
 def plan_preview(
@@ -126,13 +160,20 @@ def plan_preview(
     target_seconds: float = PREVIEW_TARGET_SECONDS,
     min_seconds: float = PREVIEW_MIN_SECONDS,
     max_seconds: float = PREVIEW_MAX_SECONDS,
+    tolerance_seconds: float = PREVIEW_TOLERANCE_SECONDS,
 ) -> PreviewPlan:
     scenes = storyboard.scenes
     if not scenes:
         return PreviewPlan(shot_indices=[], scene_indices=[], start_seconds=0.0, end_seconds=0.0, approx_seconds=0.0)
 
+    extended_max = max_seconds + tolerance_seconds
     n = len(scenes)
-    # (in_range, score, distance_to_target, i, j, duration) for every contiguous window
+    # (in_range, score, distance_to_target, i, j, duration) for every contiguous window.
+    # "in_range" allows up to `tolerance_seconds` over max_seconds -- an
+    # excellent window is never discarded over a fraction of a second; it is
+    # trimmed precisely below instead. The distance-to-target metric still
+    # uses the post-trim (capped) duration, since that's what a viewer would
+    # actually see.
     candidates: list[tuple[bool, float, float, int, int, float]] = []
     for i in range(n):
         duration = 0.0
@@ -140,30 +181,40 @@ def plan_preview(
         for j in range(i, n):
             duration += scenes[j].duration
             score += scenes[j].combined_score
-            if duration > max_seconds * 2:
+            if duration > extended_max * 1.5:
                 break
-            in_range = min_seconds <= duration <= max_seconds
-            candidates.append((in_range, score, abs(duration - target_seconds), i, j, duration))
+            in_range = min_seconds <= duration <= extended_max
+            effective_duration = min(duration, max_seconds)
+            candidates.append((in_range, score, abs(effective_duration - target_seconds), i, j, duration))
 
     in_range = [c for c in candidates if c[0]]
     if in_range:
-        # Highest combined score wins; ties broken by closeness to the target duration.
+        # Highest combined score wins (still multi-criteria, never "just the
+        # energy peak"); ties broken by closeness to the target duration.
         best = max(in_range, key=lambda c: (c[1], -c[2]))
     elif candidates:
-        # No window fits [min,max] (e.g. a very short song) -- take the
-        # closest-to-target duration available rather than failing.
+        # No window fits even with tolerance (e.g. a very short song) --
+        # take the closest-to-target duration available rather than failing.
         best = min(candidates, key=lambda c: c[2])
     else:
         best = (False, 0.0, 0.0, 0, n - 1, sum(s.duration for s in scenes))
 
     _, _, _, i, j, duration = best
     window = scenes[i : j + 1]
-    shot_indices = [shot.index for scene in window for shot in scene.shots]
+    shots = sorted((shot for scene in window for shot in scene.shots), key=lambda s: s.index)
+
+    shot_duration_overrides: dict[int, float] = {}
+    if duration > max_seconds:
+        shots, shot_duration_overrides, duration = _trim_shots_to_max_duration(shots, max_seconds)
+
+    start = window[0].start_seconds
+    end = round(start + duration, 2)
 
     return PreviewPlan(
-        shot_indices=shot_indices,
+        shot_indices=[s.index for s in shots],
         scene_indices=[s.index for s in window],
-        start_seconds=window[0].start_seconds,
-        end_seconds=window[-1].end_seconds,
+        start_seconds=start,
+        end_seconds=end,
         approx_seconds=round(duration, 1),
+        shot_duration_overrides=shot_duration_overrides,
     )

@@ -38,6 +38,30 @@ GENRE_STAGING: dict[str, str] = {
 }
 
 _DEFAULT_STAGING = "des personnages dont les actions et emotions suivent le sens des paroles"
+
+DEFAULT_GENRE_KEY = "pop"
+
+
+def normalize_genre_key(genre: str) -> str:
+    """Maps ANY genre string to a key guaranteed to exist in GENRE_STAGING.
+
+    Generic by construction (not tuned to any one song): handles an exact
+    GENRE_STAGING key, a composite heuristic fallback like "jazz_rnb_zouk"
+    or "afrobeat_amapiano_dance" (AudioFeatures.suggested_genre_family(),
+    used when the real classifier is unavailable) by taking its first
+    recognizable component, and falls back to DEFAULT_GENRE_KEY for
+    anything else (an unrecognized or empty string) -- GENRE_STAGING[...]
+    lookups downstream never see a miss.
+    """
+    candidate = (genre or "").strip().lower()
+    if candidate in GENRE_STAGING:
+        return candidate
+    for part in candidate.split("_"):
+        if part in GENRE_STAGING:
+            return part
+    return DEFAULT_GENRE_KEY
+
+
 _DEFAULT_MOOD = "contemplation"
 
 
@@ -121,7 +145,7 @@ def build_storyboard(
     sections: list[LyricsSection] = analyze_lyrics(lyrics)
     scenes: list[Scene] = []
 
-    staging = GENRE_STAGING.get(genre.lower(), _DEFAULT_STAGING)
+    staging = GENRE_STAGING[normalize_genre_key(genre)]
     genre_mood = overall_mood(sections)
 
     for section in sections:
@@ -179,7 +203,7 @@ def build_storyboard_from_audio(
     song structure, so the storyboard always spans the song's actual
     duration -- never a fixed/assumed length.
     """
-    staging = GENRE_STAGING.get(genre.lower(), _DEFAULT_STAGING)
+    staging = GENRE_STAGING[normalize_genre_key(genre)]
     manual_blocks = split_into_blocks(lyrics_text) if lyrics_text and not transcription else []
 
     energy_rank = {"calme": 0, "modere": 1, "energique": 2}
@@ -253,6 +277,7 @@ _TARGET_SHOT_SECONDS = {"energique": 3.5, "modere": 6.0, "calme": 9.0}
 _ROLE_SHOT_BIAS = {
     "refrain": 0.7,
     "montee": 0.85,
+    "pic_soutenu": 0.75,
     "introduction": 1.1,
     "conclusion": 1.1,
     "pont": 1.2,
@@ -264,6 +289,7 @@ MAX_NARRATIVE_SCENE_SECONDS = 28.0
 
 NARRATIVE_IMPORTANCE = {
     "refrain": 1.0,
+    "pic_soutenu": 0.75,
     "montee": 0.7,
     "pont": 0.6,
     "couplet": 0.5,
@@ -391,6 +417,9 @@ def _aggregate_energy(audio_sections: list[AudioSection], indices: list[int]) ->
     return max(set(energies), key=energies.count)
 
 
+_PEAK_ENERGY_LEVEL = "energique"
+
+
 def _assign_role(group_index: int, total_groups: int, is_chorus_scene: bool, energy_now: str, energy_prev: Optional[str]) -> str:
     if group_index == 0:
         return "introduction"
@@ -400,6 +429,11 @@ def _assign_role(group_index: int, total_groups: int, is_chorus_scene: bool, ene
         return "refrain"
     if energy_prev is not None and _ENERGY_RANK.get(energy_now, 1) > _ENERGY_RANK.get(energy_prev, 1):
         return "montee"
+    if energy_now == _PEAK_ENERGY_LEVEL and energy_prev == _PEAK_ENERGY_LEVEL:
+        # Absolute level (still at the top) + trajectory (no longer rising,
+        # but not falling either): a sustained climactic plateau, not a
+        # generic "couplet" just because it stopped climbing.
+        return "pic_soutenu"
     return "couplet"
 
 

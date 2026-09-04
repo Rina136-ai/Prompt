@@ -23,7 +23,7 @@ from typing import Optional
 from .audio_analysis import AudioFeatures
 from .director import DirectorSettings, label
 from .lyrics_analysis import detect_figures, score_mood, split_into_blocks
-from .storyboard import GENRE_STAGING
+from .storyboard import GENRE_STAGING, normalize_genre_key
 from .transcription import TranscriptionResult
 
 MIN_FIGURE_OCCURRENCES_FOR_CAST = 2
@@ -92,7 +92,7 @@ def _build_style_bible(genre: str, director: DirectorSettings) -> StyleBible:
         era=label(director.era),
         decor_family=director.decor_phrase(),
         camera_language=label(director.camera),
-        genre_staging_base=GENRE_STAGING.get(genre.lower(), ""),
+        genre_staging_base=GENRE_STAGING[normalize_genre_key(genre)],
     )
 
 

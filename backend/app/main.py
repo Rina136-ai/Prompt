@@ -433,7 +433,13 @@ def start_preview(project_id: str):
 
     thread = threading.Thread(
         target=render_shots,
-        kwargs=dict(project=project, generator=generator, shot_indices=preview_plan.shot_indices, output_name="preview"),
+        kwargs=dict(
+            project=project,
+            generator=generator,
+            shot_indices=preview_plan.shot_indices,
+            output_name="preview",
+            shot_duration_overrides=preview_plan.shot_duration_overrides,
+        ),
         daemon=True,
     )
     thread.start()

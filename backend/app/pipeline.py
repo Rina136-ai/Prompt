@@ -228,13 +228,20 @@ def render_shots(
     generator: Generator,
     shot_indices: list[int],
     output_name: str,
+    shot_duration_overrides: Optional[dict[int, float]] = None,
 ) -> Optional[str]:
     """Phase B: generates (or reuses already-rendered) shots for the given
     subset, assembles them, and muxes with the matching slice of the
     original audio. Called with the preview's shot indices for the preview,
     and with every shot index for the full clip -- shots already rendered
     (tracked in `project.rendered_shots`) are never regenerated or re-billed.
+
+    `shot_duration_overrides` (shot.index -> shorter duration) lets a caller
+    (see outputs_planner.plan_preview's precise end-trim) render a shot for
+    less than its full storyboard span, so a preview window can be capped at
+    an exact maximum duration without dropping a whole shot.
     """
+    shot_duration_overrides = shot_duration_overrides or {}
     if project.dna is None or project.storyboard is None:
         project.status = "error"
         project.error = "Le projet n'a pas encore ete analyse (build_project doit etre appele avant render_shots)."
@@ -269,7 +276,8 @@ def render_shots(
                 local_video_path = video_assembler.download_asset(video_asset, project.work_dir, f"shot_{shot.index:03d}")
                 project.rendered_shots[shot.index] = {"video_path": local_video_path}
 
-            duration = max(0.5, shot.end_seconds - shot.start_seconds)
+            natural_duration = shot.end_seconds - shot.start_seconds
+            duration = max(0.5, shot_duration_overrides.get(shot.index, natural_duration))
             fitted_path = f"{project.work_dir}/fit_{shot.index:03d}_{output_name}.mp4"
             video_assembler.fit_clip_to_duration(local_video_path, duration, fitted_path)
             fitted_clips.append(fitted_path)
@@ -279,8 +287,10 @@ def render_shots(
         concatenated = f"{project.work_dir}/concatenated_{output_name}.mp4"
         video_assembler.concat_clips(fitted_clips, concatenated)
 
+        last_shot = requested_shots[-1]
+        last_shot_duration = shot_duration_overrides.get(last_shot.index, last_shot.end_seconds - last_shot.start_seconds)
         start = requested_shots[0].start_seconds
-        end = requested_shots[-1].end_seconds
+        end = last_shot.start_seconds + last_shot_duration
         covers_full_song = start <= 0.01 and end >= dna.duration_seconds - 0.5
         if covers_full_song:
             audio_path_for_mux = project.audio_path

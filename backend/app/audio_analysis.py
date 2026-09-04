@@ -148,6 +148,24 @@ def detect_structural_boundaries(
     return merged
 
 
+def decode_audio(path: str):
+    """Decodes an audio file once to a mono float waveform + sample rate.
+
+    Shared by analyze_audio_file() and genre_classifier.classify_genre(), so
+    genre classification analyzes the exact same signal our own pipeline
+    already decoded successfully, instead of depending on a second, less
+    robust decoder (pydub/ffmpeg via pyAudioAnalysis) for the same file.
+    """
+    try:
+        import librosa
+    except ImportError as exc:  # pragma: no cover - exercised only without librosa
+        raise AudioAnalysisUnavailable(
+            "librosa n'est pas installe. Installez-le (voir requirements.txt) "
+            "pour activer l'analyse audio, ou utilisez le mode paroles-seules."
+        ) from exc
+    return librosa.load(path, sr=None, mono=True)
+
+
 def analyze_audio_file(path: str, min_section_seconds: float = 8.0, max_sections: int = 14) -> AudioFeatures:
     try:
         import librosa
@@ -158,7 +176,7 @@ def analyze_audio_file(path: str, min_section_seconds: float = 8.0, max_sections
             "pour activer l'analyse audio, ou utilisez le mode paroles-seules."
         ) from exc
 
-    y, sr = librosa.load(path, sr=None, mono=True)
+    y, sr = decode_audio(path)
     duration = float(librosa.get_duration(y=y, sr=sr))
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
     tempo_bpm = _scalar_tempo(tempo)
