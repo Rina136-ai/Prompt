@@ -15,26 +15,34 @@ from .transcription import TranscriptionResult
 if TYPE_CHECKING:
     from .project_dna import ProjectDNA
 
+# Purely aesthetic/technical descriptors -- editing rhythm, camera movement,
+# texture, light, movement quality. Deliberately excludes any place,
+# instrument, profession/role, character, or narrative action: those come
+# from DirectorSettings (decor, characters) and the Project DNA's
+# story-driven casting (project_dna.py), never from the genre. Classifying
+# a song as Blues must be able to color HOW a scene is cut and lit, never
+# invent WHO is in it or WHERE it happens (e.g. no automatic "guitarist in
+# a bar" just because the model said "Blues").
 GENRE_STAGING: dict[str, str] = {
-    "afrobeat": "un groupe de danseurs executant une chorégraphie afrobeat synchronisee",
-    "amapiano": "des danseurs amapiano au groove bas, ambiance de block party",
-    "makossa": "des danseurs makossa dans une fete de quartier",
-    "bikutsi": "des danseurs bikutsi au rythme percussif rapide",
-    "jazz": "une chanteuse de jazz sur scene, un saxophoniste et des musiciens dans un club enfume",
-    "soul": "un ou deux personnages principaux dont les expressions suivent les paroles, mise en scene narrative",
-    "gospel": "une chorale gospel et un soliste, lumiere chaude et emotive",
-    "rnb": "un personnage principal filme en gros plans intimistes, eclairage tamise",
-    "pop": "un artiste principal entoure de danseurs sur une scene de concert",
-    "rock": "un groupe de rock sur scene avec guitares et batterie, foule en fond",
-    "zouk": "un couple qui danse le zouk, mouvements lents et sensuels",
-    "reggae": "un chanteur reggae en exterieur, ambiance detendue et ensoleillee",
-    "salsa": "des couples de danseurs de salsa dans une salle animee",
+    "afrobeat": "montage energique et syncope, mouvements de camera dynamiques, chorégraphie rythmee et athletique, lumiere chaude et vive",
+    "amapiano": "montage fluide au groove bas, mouvements amples et decontractes, eclairage tamise et ambiant",
+    "makossa": "montage chaleureux et balance, ondulations corporelles fluides, lumiere doree",
+    "bikutsi": "montage rapide et percussif, mouvements vifs et saccades, contrastes lumineux marques",
+    "jazz": "montage syncope, mouvements de camera elegants et fluides, textures feutrees, eclairage tamise",
+    "soul": "montage intimiste, expressions et gestes habites, lumiere chaude et douce",
+    "gospel": "montage ample et solennel, mouvements lents et emotifs, lumiere chaude et lumineuse",
+    "rnb": "montage en gros plans intimistes, mouvements lents et sensuels, eclairage tamise",
+    "pop": "montage dynamique multi-plans, mouvements energiques et festifs, lumiere vive et coloree",
+    "rock": "montage brut et percutant, mouvements de camera nerveux, contrastes forts, lumiere crue",
+    "zouk": "montage lent et sensuel, mouvements amples et enlaces, lumiere douce et chaude",
+    "reggae": "montage detendu, mouvements souples et nonchalants, lumiere naturelle et ensoleillee",
+    "salsa": "montage rythme et virevoltant, mouvements vifs et tournoyants, lumiere vive et coloree",
     # Familles reconnues par le classificateur audio reel (genre_classifier.py) --
     # distinctes des genres regionaux ci-dessus, que le modele ne peut pas detecter.
-    "blues": "un musicien de blues seul avec sa guitare dans un bar intimiste",
-    "classique": "un orchestre ou un soliste dans une salle de concert, mise en scene elegante",
-    "electro": "un DJ et une foule dans un club, jeux de lumiere synchronises",
-    "rap": "un rappeur et son groupe dans une ambiance urbaine, decor de rue ou de studio",
+    "blues": "montage lent et introspectif, mouvements retenus et habites, lumiere tamisee et contrastee",
+    "classique": "montage ample et pose, mouvements de camera elegants et retenus, lumiere douce et raffinee",
+    "electro": "montage syncope sur le beat, mouvements de camera saccades, jeux de lumiere synchronises et vifs",
+    "rap": "montage nerveux et direct, mouvements de camera assures, contrastes marques et bruts",
 }
 
 _DEFAULT_STAGING = "des personnages dont les actions et emotions suivent le sens des paroles"

@@ -52,7 +52,7 @@ class StyleBible:
     era: str
     decor_family: str
     camera_language: str
-    genre_staging_base: str  # atmosphere only -- never a casting signal
+    genre_staging_base: str  # purely aesthetic (editing/camera/light/movement quality) -- never a place, instrument, role, character, or narrative action
 
 
 @dataclass

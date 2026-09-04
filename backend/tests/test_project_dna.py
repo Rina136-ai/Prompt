@@ -60,10 +60,14 @@ def test_transcription_feeds_the_narrative_arc_when_no_manual_lyrics():
     assert "instrumental" not in dna.narrative.synopsis.lower()
 
 
-def test_style_bible_carries_genre_staging_not_the_characters():
+def test_style_bible_carries_genre_aesthetics_not_narrative_content():
+    # Correction: genre must color HOW a scene is shot (editing/camera/light/
+    # movement quality), never WHO is in it or WHERE it happens.
     dna = build_project_dna(_audio(), genre="afrobeat", director=DirectorSettings())
-    assert "danseurs" in dna.style.genre_staging_base  # atmosphere text, fine here
-    assert all(c.role != "danseurs" for c in dna.characters)  # but never a casting signal
+    assert "montage" in dna.style.genre_staging_base or "mouvements" in dna.style.genre_staging_base
+    assert all(c.role != "danseurs" for c in dna.characters)  # never a casting signal
+    forbidden_nouns = ["danseur", "danseuse", "chanteur", "chanteuse", "musicien", "bar", "club", "rue", "scene de concert"]
+    assert not any(noun in dna.style.genre_staging_base.lower() for noun in forbidden_nouns)
 
 
 def test_json_round_trip_preserves_everything(tmp_path):

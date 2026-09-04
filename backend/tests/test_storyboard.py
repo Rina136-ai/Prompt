@@ -35,7 +35,7 @@ def test_scene_prompt_includes_genre_staging_and_director_settings():
     prompt = storyboard.scenes[0].image_prompt
     assert "afrobeat" in prompt
     assert "photorealiste" in prompt
-    assert "danseurs" in prompt  # from GENRE_STAGING["afrobeat"]
+    assert "montage" in prompt  # aesthetic descriptor from GENRE_STAGING["afrobeat"], not a narrative noun
 
 
 def test_video_prompt_references_camera_choice():
