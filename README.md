@@ -80,7 +80,8 @@ backend/
 - Authentification réelle : header `Authorization: Key <KEY_ID>:<KEY_SECRET>` (et non un simple Bearer token)
 - `POST /v1/text2image/soul`, `POST /v1/image2video/dop`, `POST /v1/custom-references`, `POST /files/generate-upload-url` avec les corps de requête exacts documentés dans le README du SDK
 - Polling réel : `GET /requests/{request_id}/status` jusqu'à `completed`/`nsfw`/`failed`/`canceled`
-- Cohérence de personnage : mécanisme "SoulId" réel (`custom_reference_id`), pas une invention
+- Cohérence de personnage : mécanisme "SoulId" réel (`custom_reference_id`), confirmé (par le type `SoulIdCreateData` du SDK) comme un mécanisme déjà instantané/léger — pas de minimum de photos, pas d'entraînement — donc distinct des flux d'entraînement de personnage plus lourds ("Soul 2.0"/"Soul Cinema") visibles dans l'offre grand public de Higgsfield mais dont l'API publique n'est pas vérifiable depuis ce environnement
+- Modèle vidéo DoP : 3 niveaux réels (`dop-lite`/`dop-turbo`/`dop-standard`, confirmés dans le SDK) ; `dop-lite` (le plus basique/économique) est le défaut, réglable via `HIGGSFIELD_VIDEO_MODEL`
 
 Ceci est **vérifié contre une source primaire (le code du SDK officiel)**, mais **aucun appel réel n'a été exécuté** dans cet environnement : il n'y a pas de clé API ici, et le domaine est de toute façon bloqué. Un test séparé existe pour la vérification finale à faire vous-même :
 

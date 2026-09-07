@@ -1,7 +1,7 @@
 import os
 
 from .base import GeneratedAsset, GenerationError, Generator
-from .higgsfield import HiggsfieldGenerator
+from .higgsfield import DEFAULT_VIDEO_MODEL, HiggsfieldGenerator
 from .mock import MockGenerator
 
 
@@ -22,7 +22,10 @@ def get_generator() -> Generator:
     credentials = _read_credentials()
     if credentials:
         base_url = os.environ.get("HIGGSFIELD_BASE_URL", "https://platform.higgsfield.ai")
-        return HiggsfieldGenerator(key_id=credentials[0], key_secret=credentials[1], base_url=base_url)
+        video_model = os.environ.get("HIGGSFIELD_VIDEO_MODEL") or DEFAULT_VIDEO_MODEL
+        return HiggsfieldGenerator(
+            key_id=credentials[0], key_secret=credentials[1], base_url=base_url, video_model=video_model
+        )
     return MockGenerator()
 
 
